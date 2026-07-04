@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import requests
 
 from common import market
 
@@ -62,12 +63,36 @@ def test_realized_vol_of_constant_series_is_zero():
 
 def test_summarize_pair_full_key_set(monkeypatch, df):
     monkeypatch.setattr(market, "fetch_klines", lambda pair, **kw: df)
+    monkeypatch.setattr(market, "derivatives", lambda pair: {
+        "funding_rate_pct": 0.01, "oi_change_24h_pct": 3.2, "long_short_ratio": 1.8,
+    })
     out = market.summarize_pair("BTC/USDT")
     assert set(out) == {
         "pair", "price", "change_1h_pct", "change_4h_pct", "change_24h_pct",
         "change_7d_pct", "rsi_14", "ema_trend", "price_vs_ema21_pct",
         "atr_14_pct", "vol_daily_pct", "range_24h_pct", "closes_2h_pct",
+        "derivatives",
     }
     assert set(out["range_24h_pct"]) == {"high", "low"}
+    assert set(out["derivatives"]) == {
+        "funding_rate_pct", "oi_change_24h_pct", "long_short_ratio",
+    }
     assert len(out["closes_2h_pct"]) == 12
     assert out["change_7d_pct"] is not None
+
+
+def test_oi_change_pct_matches_hand_computed():
+    hist = [{"sumOpenInterest": "100.0"}, {"sumOpenInterest": "110.0"}]
+    assert market.oi_change_pct(hist) == 10.0
+
+
+def test_oi_change_pct_none_on_short_data():
+    assert market.oi_change_pct([]) is None
+    assert market.oi_change_pct([{"sumOpenInterest": "100.0"}]) is None
+
+
+def test_derivatives_none_when_fetch_raises(monkeypatch):
+    def boom(*a, **kw):
+        raise requests.RequestException("no futures market")
+    monkeypatch.setattr(market.requests, "get", boom)
+    assert market.derivatives("WBETH/USDT") is None

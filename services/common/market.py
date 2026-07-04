@@ -7,6 +7,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 BINANCE_API = "https://api.binance.com/api/v3"
+BINANCE_FAPI = "https://fapi.binance.com"
 FEAR_GREED_API = "https://api.alternative.me/fng/?limit=7"
 
 PAIRS = ["ADA/USDT", "BTC/USDT", "ETH/USDT", "SOL/USDT"]
@@ -74,6 +75,39 @@ def trajectory_pct(closes: pd.Series, points: int = 12, step: int = 2) -> list[f
     return [round((float(closes.iloc[i]) / price - 1) * 100, 2) for i in reversed(idx)]
 
 
+def _fapi(path: str, **params) -> list | dict:
+    resp = requests.get(f"{BINANCE_FAPI}{path}", params=params, timeout=10)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def oi_change_pct(hist: list[dict]) -> float | None:
+    """% change of sumOpenInterest, first vs last row; None on empty/short data."""
+    if len(hist) < 2:
+        return None
+    first = float(hist[0]["sumOpenInterest"])
+    last = float(hist[-1]["sumOpenInterest"])
+    return round((last / first - 1) * 100, 2)
+
+
+def derivatives(pair: str) -> dict | None:
+    """Binance USDT-M futures positioning, or None if the pair has no liquid
+    futures market or any endpoint fails (many watchlist pairs are spot-only)."""
+    symbol = _symbol(pair)
+    try:
+        funding = float(_fapi("/fapi/v1/premiumIndex", symbol=symbol)["lastFundingRate"])
+        oi_hist = _fapi("/futures/data/openInterestHist", symbol=symbol, period="1h", limit=25)
+        lsr = _fapi("/futures/data/globalLongShortAccountRatio", symbol=symbol, period="1h", limit=1)
+        return {
+            "funding_rate_pct": round(funding * 100, 4),
+            "oi_change_24h_pct": oi_change_pct(oi_hist),
+            "long_short_ratio": round(float(lsr[-1]["longShortRatio"]), 2),
+        }
+    except Exception as exc:
+        logger.debug("Derivatives fetch failed for %s: %s", pair, exc)
+        return None
+
+
 def summarize_pair(pair: str) -> dict:
     """Compact indicator snapshot suitable for an LLM prompt."""
     df = fetch_klines(pair)
@@ -100,6 +134,7 @@ def summarize_pair(pair: str) -> dict:
             "low": round((low_24h / price - 1) * 100, 2),
         },
         "closes_2h_pct": trajectory_pct(closes),
+        "derivatives": derivatives(pair),
     }
 
 

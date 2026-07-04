@@ -52,6 +52,11 @@ Guidelines:
 - Continuity: avoid flip-flopping the regime without a clear change in the
   data, but do not anchor to a prior posture when conditions genuinely changed.
 - rationale: 2-3 sentences max.
+
+You MAY search the web for recent market-moving crypto news (regulation, ETF
+flows, exchange incidents, macro events) before setting the posture. Search at
+most a few times, and only when the snapshot alone is ambiguous or shows a sharp
+move. If a search is decisive, cite the finding briefly in the rationale.
 """
 
 
@@ -84,6 +89,8 @@ def generate_posture() -> dict:
         system=SYSTEM_PROMPT,
         user_content=user_content,
         schema=POSTURE_SCHEMA,
+        max_tokens=4096,
+        web_search_max_uses=4,
     )
     posture["generated_at"] = utc_now_iso()
     posture["source"] = "claude"

@@ -79,6 +79,11 @@ Data notes:
   thesis.
 - Your recent decision cycles are for continuity: do not re-buy a pair you just
   sold, and do not flip your view hour to hour without new information.
+- derivatives shows futures positioning: funding_rate_pct is the per-8h funding
+  rate (persistently positive = crowded longs, negative = crowded shorts;
+  extremes often precede reversals), oi_change_24h_pct is open-interest change,
+  long_short_ratio is the account long/short ratio; null means no liquid futures
+  market for that pair.
 """
 
 
