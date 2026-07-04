@@ -53,7 +53,8 @@ def buy_and_hold_series(since: datetime) -> pd.Series:
 
 def llm_cost_usd() -> float:
     tokens_in = tokens_out = 0
-    for log in ("advisor_log.jsonl", "llm_trader_decisions.jsonl"):
+    for log in ("advisor_log.jsonl", "llm_trader_decisions.jsonl",
+                "scout_log.jsonl", "postmortem_log.jsonl"):
         for rec in read_jsonl(shared_dir() / log):
             usage = rec.get("usage") or {}
             tokens_in += usage.get("input_tokens", 0)
@@ -78,7 +79,8 @@ def render_html(daily: pd.DataFrame, summary: list[dict], cost: float,
     lo = min(cumulative.min().min(), 0) if not cumulative.empty else -1
     hi = max(cumulative.max().max(), 0) if not cumulative.empty else 1
     span = (hi - lo) or 1
-    colors = {"quant-bot": "#2f81f7", "llm-bot": "#d29922", "ADA hold": "#3fb950"}
+    colors = {"quant-bot": "#2f81f7", "llm-bot": "#d29922", "freqai-bot": "#a371f7",
+              "ADA hold": "#3fb950"}
 
     def polyline(series: pd.Series) -> str:
         n = max(len(series) - 1, 1)
@@ -122,8 +124,9 @@ Estimated LLM API cost so far: ${cost:.2f}</p>
 def main() -> None:
     quant = load_closed_trades(os.environ.get("QUANT_DB", "/data/quant/tradesv3.dryrun.sqlite"))
     llm = load_closed_trades(os.environ.get("LLM_DB", "/data/llm/tradesv3.dryrun.sqlite"))
+    freqai = load_closed_trades(os.environ.get("FREQAI_DB", "/data/freqai/tradesv3.dryrun.sqlite"))
 
-    all_dates = pd.concat([quant["close_date"], llm["close_date"]])
+    all_dates = pd.concat([quant["close_date"], llm["close_date"], freqai["close_date"]])
     start = (all_dates.min().tz_localize("UTC") if not all_dates.empty
              and all_dates.min().tzinfo is None else all_dates.min()) \
         if not all_dates.empty else datetime.now(timezone.utc)
@@ -131,6 +134,7 @@ def main() -> None:
     daily = pd.DataFrame({
         "quant-bot": pnl_by_period(quant, "D"),
         "llm-bot": pnl_by_period(llm, "D"),
+        "freqai-bot": pnl_by_period(freqai, "D"),
     })
     try:
         hold = buy_and_hold_series(start if isinstance(start, datetime) else start.to_pydatetime())
@@ -141,7 +145,8 @@ def main() -> None:
     except Exception as exc:
         print(f"(benchmark unavailable: {exc})")
 
-    summary = [summarize("quant-bot (Bot A)", quant), summarize("llm-bot (Bot B)", llm)]
+    summary = [summarize("quant-bot (Bot A)", quant), summarize("llm-bot (Bot B)", llm),
+               summarize("freqai-bot (Bot C)", freqai)]
     cost = llm_cost_usd()
 
     print("\n=== Paper-trading comparison ===")
@@ -154,6 +159,7 @@ def main() -> None:
         table = pd.DataFrame({
             "quant-bot": pnl_by_period(quant, freq),
             "llm-bot": pnl_by_period(llm, freq),
+            "freqai-bot": pnl_by_period(freqai, freq),
         }).round(2)
         if not table.empty:
             print(f"\n--- {label} realized PnL (USDT) ---")

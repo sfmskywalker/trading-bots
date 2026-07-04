@@ -1,5 +1,5 @@
 {
-    "bot_name": "quant-bot",
+    "bot_name": "freqai-bot",
     "dry_run": true,
     "dry_run_wallet": 10000,
     "trading_mode": "spot",
@@ -37,25 +37,41 @@
         "secret": "",
         "ccxt_config": {},
         "ccxt_async_config": {},
-        "pair_whitelist": [],
-        "pair_blacklist": [
-            ".*(UP|DOWN|BULL|BEAR)/USDT",
-            "(USDC|FDUSD|TUSD|USDP|DAI|BUSD|USD1|AEUR|EUR|EURI|GBP|TRY|BRL|ARS|COP|XUSD)/USDT",
-            "(WBTC|WBETH|WETH)/USDT"
-        ]
+        "pair_whitelist": [
+            "ADA/USDT",
+            "BTC/USDT",
+            "ETH/USDT",
+            "SOL/USDT"
+        ],
+        "pair_blacklist": []
     },
     "pairlists": [
-        {
-            "method": "VolumePairList",
-            "number_assets": 30,
-            "sort_key": "quoteVolume",
-            "min_value": 10000000,
-            "refresh_period": 1800
-        },
-        {"method": "AgeFilter", "min_days_listed": 30},
-        {"method": "SpreadFilter", "max_spread_ratio": 0.005},
-        {"method": "ShuffleFilter", "seed": 42}
+        {"method": "StaticPairList"}
     ],
+    "freqai": {
+        "enabled": true,
+        "identifier": "trend-v1",
+        "purge_old_models": 2,
+        "train_period_days": 30,
+        "backtest_period_days": 7,
+        "live_retrain_hours": 12,
+        "expiration_hours": 24,
+        "feature_parameters": {
+            "include_timeframes": ["1h", "4h"],
+            "include_corr_pairlist": ["BTC/USDT"],
+            "label_period_candles": 12,
+            "include_shifted_candles": 2,
+            "indicator_periods_candles": [10, 20],
+            "weight_factor": 0.9
+        },
+        "data_split_parameters": {
+            "test_size": 0.25,
+            "shuffle": false
+        },
+        "model_training_parameters": {
+            "n_estimators": 400
+        }
+    },
     "telegram": {
         "enabled": false,
         "token": "",

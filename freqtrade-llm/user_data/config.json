@@ -37,16 +37,22 @@
         "secret": "",
         "ccxt_config": {},
         "ccxt_async_config": {},
-        "pair_whitelist": [
-            "ADA/USDT",
-            "BTC/USDT",
-            "ETH/USDT",
-            "SOL/USDT"
-        ],
-        "pair_blacklist": []
+        "pair_whitelist": [],
+        "pair_blacklist": [
+            ".*(UP|DOWN|BULL|BEAR)/USDT",
+            "(USDC|FDUSD|TUSD|USDP|DAI|BUSD|USD1|AEUR|EUR|EURI|GBP|TRY|BRL|ARS|COP|XUSD)/USDT",
+            "(WBTC|WBETH|WETH)/USDT"
+        ]
     },
     "pairlists": [
-        {"method": "StaticPairList"}
+        {
+            "method": "VolumePairList",
+            "number_assets": 60,
+            "sort_key": "quoteVolume",
+            "min_value": 5000000,
+            "refresh_period": 1800
+        },
+        {"method": "AgeFilter", "min_days_listed": 30}
     ],
     "telegram": {
         "enabled": false,

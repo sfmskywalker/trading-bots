@@ -59,6 +59,24 @@ def summarize_pair(pair: str) -> dict:
     }
 
 
+def fetch_tickers_24h() -> list[dict]:
+    """24h stats for every USDT spot pair on Binance."""
+    resp = requests.get(f"{BINANCE_API}/ticker/24hr", timeout=20)
+    resp.raise_for_status()
+    out = []
+    for t in resp.json():
+        if not t["symbol"].endswith("USDT"):
+            continue
+        out.append({
+            "pair": t["symbol"][:-4] + "/USDT",
+            "price": float(t["lastPrice"]),
+            "change_24h_pct": float(t["priceChangePercent"]),
+            "quote_volume_24h": float(t["quoteVolume"]),
+            "trades_24h": int(t["count"]),
+        })
+    return out
+
+
 def fetch_fear_greed() -> list[dict]:
     """Crypto Fear & Greed index, last 7 days. Empty list on failure."""
     try:

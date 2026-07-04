@@ -10,7 +10,7 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from common import claude, market
+from common import claude, context, market
 from common.freqtrade_api import FreqtradeClient
 from common.util import append_jsonl, read_jsonl, shared_dir, utc_now_iso
 from llm_trader import guardrails
@@ -20,34 +20,40 @@ logger = logging.getLogger("llm_trader")
 
 DECISION_LOG = "llm_trader_decisions.jsonl"
 
-DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "market_view": {"type": "string"},
-        "actions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "action": {"type": "string", "enum": ["buy", "sell", "hold"]},
-                    "pair": {"type": "string", "enum": market.PAIRS},
-                    "stake_usdt": {"type": "number"},
-                    "trade_id": {"type": "integer"},
-                    "reasoning": {"type": "string"},
+
+def decision_schema(allowed_pairs: list[str]) -> dict:
+    """Schema is built per cycle so the pair enum tracks the live universe."""
+    return {
+        "type": "object",
+        "properties": {
+            "market_view": {"type": "string"},
+            "actions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["buy", "sell", "hold"]},
+                        "pair": {"type": "string", "enum": allowed_pairs},
+                        "stake_usdt": {"type": "number"},
+                        "trade_id": {"type": "integer"},
+                        "reasoning": {"type": "string"},
+                    },
+                    "required": ["action", "reasoning"],
+                    "additionalProperties": False,
                 },
-                "required": ["action", "reasoning"],
-                "additionalProperties": False,
             },
         },
-    },
-    "required": ["market_view", "actions"],
-    "additionalProperties": False,
-}
+        "required": ["market_view", "actions"],
+        "additionalProperties": False,
+    }
 
-SYSTEM_PROMPT = f"""\
+
+SYSTEM_PROMPT = """\
 You are an autonomous crypto spot trader in a PAPER TRADING experiment. You
-manage a simulated 10,000 USDT wallet on Binance spot, trading only these
-pairs: {', '.join(market.PAIRS)}. Long only, no leverage.
+manage a simulated 10,000 USDT wallet on Binance spot. Long only, no leverage.
+You may only trade the pairs listed in the prompt: a set of core majors plus
+a scout's current watchlist (each watchlist entry comes with a thesis — treat
+it as a hypothesis to evaluate, not an instruction to buy).
 
 Each hour you receive the market snapshot and your current positions, and you
 return up to 3 actions:
@@ -104,24 +110,39 @@ def bot_state(ft: FreqtradeClient) -> tuple[dict, guardrails.BotState]:
     return snapshot, state
 
 
+def tradable_universe() -> tuple[list[str], list[dict]]:
+    """Core pairs plus the scout's current (code-filtered) watchlist."""
+    watchlist = context.read_watchlist()
+    pairs = list(market.PAIRS)
+    for entry in watchlist:
+        if entry["pair"] not in pairs:
+            pairs.append(entry["pair"])
+    return pairs, watchlist
+
+
 def run_cycle(ft: FreqtradeClient) -> None:
-    market_data = market.market_snapshot()
+    pairs, watchlist = tradable_universe()
+    market_data = market.market_snapshot(pairs)
     position_data, state = bot_state(ft)
+    lessons = context.read_lessons()
 
     user_content = (
         f"Hard limits (enforced by code): max stake {guardrails.MAX_STAKE_USDT} USDT, "
         f"max {guardrails.MAX_OPEN_TRADES} open trades, "
         f"max {guardrails.MAX_TRADES_PER_DAY} entries/day.\n\n"
+        f"Tradable pairs this cycle: {', '.join(pairs)}\n\n"
+        f"Scout watchlist (hypotheses, not orders):\n{json.dumps(watchlist, indent=2)}\n\n"
         f"Market snapshot:\n{json.dumps(market_data, indent=2)}\n\n"
         f"Your account:\n{json.dumps(position_data, indent=2)}"
+        + (f"\n\nLessons from past performance reviews:\n{lessons}" if lessons else "")
     )
     decision, usage = claude.call_structured(
-        system=SYSTEM_PROMPT, user_content=user_content, schema=DECISION_SCHEMA,
+        system=SYSTEM_PROMPT, user_content=user_content, schema=decision_schema(pairs),
     )
 
     executed, rejected = [], []
     for action in decision["actions"][:3]:
-        allowed, reason = guardrails.validate(action, state)
+        allowed, reason = guardrails.validate(action, state, pairs)
         if not allowed:
             logger.warning("Rejected %s: %s", action, reason)
             rejected.append({**action, "rejected_because": reason})

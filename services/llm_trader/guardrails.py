@@ -6,7 +6,6 @@ an action that violates a limit here is rejected before it reaches the bot.
 import os
 from dataclasses import dataclass, field
 
-from common.market import PAIRS
 from common.util import shared_dir
 
 
@@ -34,8 +33,12 @@ def kill_switch_active() -> bool:
     return (shared_dir() / KILL_SWITCH_FILE).exists()
 
 
-def validate(decision: dict, state: BotState) -> tuple[bool, str]:
-    """Return (allowed, reason). Reason explains a rejection."""
+def validate(decision: dict, state: BotState, allowed_pairs: list[str]) -> tuple[bool, str]:
+    """Return (allowed, reason). Reason explains a rejection.
+
+    allowed_pairs is the cycle's tradable universe: the core pairs plus
+    whatever the scout's (code-filtered) watchlist currently contains.
+    """
     if kill_switch_active():
         return False, f"kill switch file present ({KILL_SWITCH_FILE})"
 
@@ -44,8 +47,8 @@ def validate(decision: dict, state: BotState) -> tuple[bool, str]:
         return True, "hold is always allowed"
 
     if action == "buy":
-        if decision.get("pair") not in PAIRS:
-            return False, f"pair {decision.get('pair')} not in whitelist"
+        if decision.get("pair") not in allowed_pairs:
+            return False, f"pair {decision.get('pair')} not in allowed universe"
         stake = decision.get("stake_usdt") or 0
         if not 0 < stake <= MAX_STAKE_USDT:
             return False, f"stake {stake} outside (0, {MAX_STAKE_USDT}]"

@@ -9,7 +9,7 @@ import json
 import logging
 import time
 
-from common import claude, market
+from common import claude, context, market
 from common.util import append_jsonl, atomic_write_json, shared_dir, utc_now_iso
 import os
 
@@ -25,7 +25,7 @@ POSTURE_SCHEMA = {
         "stake_multiplier": {"type": "number"},
         "veto_pairs": {
             "type": "array",
-            "items": {"type": "string", "enum": market.PAIRS},
+            "items": {"type": "string"},
         },
         "rationale": {"type": "string"},
     },
@@ -36,14 +36,17 @@ POSTURE_SCHEMA = {
 
 SYSTEM_PROMPT = """\
 You are a risk advisor for a crypto paper-trading experiment. A trend-following
-bot trades ADA, BTC, ETH and SOL spot pairs on 1h candles. You do NOT pick
-trades. You only set the overall risk posture that gates the bot's entries.
+bot trades the top ~30 Binance USDT spot pairs by volume on 1h candles. You do
+NOT pick trades. You only set the overall risk posture that gates the bot's
+entries. The market snapshot shows the majors (a proxy for overall regime) and
+a scout's current watchlist for extra context.
 
 Guidelines:
 - regime: risk_off when the market shows broad weakness, panic, or a sharp
   regime change; risk_on only with broad confirmed strength; otherwise neutral.
 - stake_multiplier between 0.25 (very defensive) and 1.5 (aggressive), 1.0 default.
-- veto_pairs: pairs showing idiosyncratic weakness the bot should not enter.
+- veto_pairs: pairs (as "XXX/USDT") showing idiosyncratic weakness or
+  pump-and-dump behavior the bot should not enter.
 - Be conservative. The cost of missing a trade is lower than the cost of a
   drawdown. When the data is ambiguous, choose neutral with multiplier 1.0.
 - rationale: 2-3 sentences max.
@@ -65,9 +68,16 @@ def neutral_posture(reason: str) -> dict:
 
 def generate_posture() -> dict:
     snapshot = market.market_snapshot()
+    watchlist = context.read_watchlist()
+    lessons = context.read_lessons()
+    user_content = (
+        "Current market snapshot (majors):\n" + json.dumps(snapshot, indent=2)
+        + "\n\nScout watchlist:\n" + json.dumps(watchlist, indent=2)
+        + (f"\n\nLessons from past performance reviews:\n{lessons}" if lessons else "")
+    )
     posture, usage = claude.call_structured(
         system=SYSTEM_PROMPT,
-        user_content="Current market snapshot:\n" + json.dumps(snapshot, indent=2),
+        user_content=user_content,
         schema=POSTURE_SCHEMA,
     )
     posture["generated_at"] = utc_now_iso()

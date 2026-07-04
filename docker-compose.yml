@@ -36,6 +36,57 @@ services:
       --config /freqtrade/user_data/config.json
       --strategy LlmSignalStrategy
 
+  # Bot C: FreqAI adaptive ML — a LightGBM model retrained every 12h on the
+  # last 30 days predicts 12h price moves. The statistical-learning contender.
+  freqtrade-freqai:
+    image: freqtradeorg/freqtrade:stable_freqai
+    restart: unless-stopped
+    volumes:
+      - ./freqtrade-freqai/user_data:/freqtrade/user_data
+    ports:
+      - "127.0.0.1:8082:8080"
+    environment:
+      - FREQTRADE__API_SERVER__PASSWORD=${FT_API_PASSWORD:-change-me-locally}
+      - FREQTRADE__API_SERVER__JWT_SECRET_KEY=${FT_JWT_SECRET:-local-dev-jwt-secret-not-for-production-use}
+      - FREQTRADE__API_SERVER__WS_TOKEN=${FT_WS_TOKEN:-local-dev-ws-token-not-for-production-use}
+    command: >
+      trade
+      --config /freqtrade/user_data/config.json
+      --strategy FreqaiTrend
+      --freqaimodel LightGBMRegressor
+
+  # Exchange-wide asset discovery -> shared/watchlist.json for Bot B + advisor.
+  scout:
+    build: ./services
+    restart: unless-stopped
+    volumes:
+      - ./shared:/shared
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
+      - SCOUT_INTERVAL_HOURS=${SCOUT_INTERVAL_HOURS:-4}
+      - SHARED_DIR=/shared
+    command: python -m scout.main
+
+  # Weekly Claude review of closed trades -> shared/lessons.md (learning loop).
+  postmortem:
+    build: ./services
+    restart: unless-stopped
+    volumes:
+      - ./shared:/shared
+      - ./freqtrade-quant/user_data:/data/quant:ro
+      - ./freqtrade-llm/user_data:/data/llm:ro
+      - ./freqtrade-freqai/user_data:/data/freqai:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
+      - SHARED_DIR=/shared
+      - QUANT_DB=/data/quant/tradesv3.dryrun.sqlite
+      - LLM_DB=/data/llm/tradesv3.dryrun.sqlite
+      - FREQAI_DB=/data/freqai/tradesv3.dryrun.sqlite
+      - POSTMORTEM_INTERVAL_DAYS=${POSTMORTEM_INTERVAL_DAYS:-7}
+    command: python -m postmortem.main
+
   # Scheduled Claude analysis -> shared/posture.json consumed by Bot A.
   advisor:
     build: ./services
@@ -44,7 +95,7 @@ services:
       - ./shared:/shared
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-5}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
       - ADVISOR_INTERVAL_HOURS=${ADVISOR_INTERVAL_HOURS:-4}
       - SHARED_DIR=/shared
     command: python -m advisor.main
@@ -59,7 +110,7 @@ services:
       - ./shared:/shared
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-5}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
       - SHARED_DIR=/shared
       - FT_API_URL=http://freqtrade-llm:8080
       - FT_API_USERNAME=freqtrader
@@ -73,11 +124,13 @@ services:
     volumes:
       - ./freqtrade-quant/user_data:/data/quant:ro
       - ./freqtrade-llm/user_data:/data/llm:ro
+      - ./freqtrade-freqai/user_data:/data/freqai:ro
       - ./shared:/shared:ro
       - ./comparison-output:/output
     environment:
       - QUANT_DB=/data/quant/tradesv3.dryrun.sqlite
       - LLM_DB=/data/llm/tradesv3.dryrun.sqlite
+      - FREQAI_DB=/data/freqai/tradesv3.dryrun.sqlite
       - SHARED_DIR=/shared
       - OUTPUT_DIR=/output
     command: python -m comparison.main
