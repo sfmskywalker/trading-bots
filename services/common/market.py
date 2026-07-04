@@ -156,6 +156,64 @@ def fetch_tickers_24h() -> list[dict]:
     return out
 
 
+def fetch_funding_history(pair: str, start_time_ms: int | None = None,
+                          limit: int = 1000) -> list[dict]:
+    """Settled funding events for a perp, oldest first. Each:
+    {"funding_time": int_ms, "funding_rate": float, "mark_price": float | None}."""
+    params = {"symbol": _symbol(pair), "limit": limit}
+    if start_time_ms is not None:
+        params["startTime"] = start_time_ms
+    rows = _fapi("/fapi/v1/fundingRate", **params)
+    return [
+        {
+            "funding_time": int(r["fundingTime"]),
+            "funding_rate": float(r["fundingRate"]),
+            "mark_price": float(r["markPrice"]) if r.get("markPrice") else None,
+        }
+        for r in rows
+    ]
+
+
+def fetch_premium_index_all() -> dict[str, dict]:
+    """All USDT-M perps keyed by pair ('BTC/USDT'): {"mark_price": float,
+    "last_funding_rate": float}. One request (GET /fapi/v1/premiumIndex)."""
+    out = {}
+    for r in _fapi("/fapi/v1/premiumIndex"):
+        symbol = r["symbol"]
+        if not symbol.endswith("USDT"):
+            continue
+        out[symbol[:-4] + "/USDT"] = {
+            "mark_price": float(r["markPrice"]),
+            "last_funding_rate": float(r["lastFundingRate"]),
+        }
+    return out
+
+
+def fetch_perp_tickers_24h() -> list[dict]:
+    """24h stats for USDT-M perps: {"pair", "quote_volume_24h", "trades_24h"}
+    (GET /fapi/v1/ticker/24hr), mirroring fetch_tickers_24h() shape."""
+    out = []
+    for t in _fapi("/fapi/v1/ticker/24hr"):
+        if not t["symbol"].endswith("USDT"):
+            continue
+        out.append({
+            "pair": t["symbol"][:-4] + "/USDT",
+            "quote_volume_24h": float(t["quoteVolume"]),
+            "trades_24h": int(t["count"]),
+        })
+    return out
+
+
+def fetch_spot_price(pair: str) -> float:
+    """Last spot price (GET /api/v3/ticker/price). Raises on spot-less symbols
+    — callers use this to reject perps with no spot leg."""
+    resp = requests.get(
+        f"{BINANCE_API}/ticker/price", params={"symbol": _symbol(pair)}, timeout=10,
+    )
+    resp.raise_for_status()
+    return float(resp.json()["price"])
+
+
 def fetch_fear_greed() -> list[dict]:
     """Crypto Fear & Greed index, last 7 days. Empty list on failure."""
     try:

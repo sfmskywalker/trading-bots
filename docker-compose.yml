@@ -117,6 +117,21 @@ services:
       - FT_API_PASSWORD=${FT_API_PASSWORD:-change-me-locally}
     command: python -m llm_trader.main
 
+  # Bot D: mechanical delta-neutral funding-rate carry (long spot + short perp),
+  # pure rules, no LLM, no keys. Paper only.
+  carry:
+    build: ./services
+    restart: unless-stopped
+    volumes:
+      - ./shared:/shared
+    environment:
+      - SHARED_DIR=/shared
+      - CARRY_INTERVAL_MINUTES=${CARRY_INTERVAL_MINUTES:-60}
+      - CARRY_ENTRY_APR_PCT=${CARRY_ENTRY_APR_PCT:-15}
+      - CARRY_MAX_NOTIONAL_USDT=${CARRY_MAX_NOTIONAL_USDT:-2000}
+      - CARRY_MAX_CONCURRENT=${CARRY_MAX_CONCURRENT:-4}
+    command: python -m carry.main
+
   # On-demand PnL comparison report: docker compose run --rm comparison
   comparison:
     build: ./services

@@ -33,6 +33,29 @@ def load_closed_trades(db_path: str) -> pd.DataFrame:
     return df
 
 
+def _coerce_at(value) -> pd.Timestamp:
+    """Carry ledger 'at' is mixed: funding events use int ms (fundingTime),
+    open/close events use ISO strings. Coerce both to UTC timestamps."""
+    if isinstance(value, (int, float)):
+        return pd.to_datetime(value, unit="ms", utc=True)
+    return pd.to_datetime(value, utc=True)
+
+
+def load_carry_trades() -> pd.DataFrame:
+    """shared/carry_ledger.jsonl -> DataFrame[close_date, close_profit_abs, type].
+    Every event's pnl_usdt contributes to realized PnL; 'type' is kept so the
+    summary can count only 'close' rows as trades. Empty frame if absent."""
+    records = read_jsonl(shared_dir() / "carry_ledger.jsonl")
+    if not records:
+        return pd.DataFrame(columns=["close_date", "close_profit_abs", "type"])
+    df = pd.DataFrame({
+        "close_date": [_coerce_at(r["at"]) for r in records],
+        "close_profit_abs": [r["pnl_usdt"] for r in records],
+        "type": [r.get("type") for r in records],
+    })
+    return df
+
+
 def pnl_by_period(trades: pd.DataFrame, freq: str) -> pd.Series:
     if trades.empty:
         return pd.Series(dtype=float)
@@ -64,9 +87,12 @@ def llm_cost_usd() -> float:
 
 def summarize(name: str, trades: pd.DataFrame) -> dict:
     total = trades["close_profit_abs"].sum() if not trades.empty else 0.0
+    # Ledger-style frames (carry) mix event types; count only closes as trades.
+    closed = (int((trades["type"] == "close").sum()) if "type" in trades.columns
+              else len(trades))
     return {
         "bot": name,
-        "closed_trades": len(trades),
+        "closed_trades": closed,
         "realized_pnl_usdt": round(total, 2),
         "realized_pnl_pct": round(total / STARTING_BALANCE * 100, 2),
     }
@@ -80,7 +106,7 @@ def render_html(daily: pd.DataFrame, summary: list[dict], cost: float,
     hi = max(cumulative.max().max(), 0) if not cumulative.empty else 1
     span = (hi - lo) or 1
     colors = {"quant-bot": "#2f81f7", "llm-bot": "#d29922", "freqai-bot": "#a371f7",
-              "ADA hold": "#3fb950"}
+              "carry-bot": "#f778ba", "ADA hold": "#3fb950"}
 
     def polyline(series: pd.Series) -> str:
         n = max(len(series) - 1, 1)
@@ -125,8 +151,14 @@ def main() -> None:
     quant = load_closed_trades(os.environ.get("QUANT_DB", "/data/quant/tradesv3.dryrun.sqlite"))
     llm = load_closed_trades(os.environ.get("LLM_DB", "/data/llm/tradesv3.dryrun.sqlite"))
     freqai = load_closed_trades(os.environ.get("FREQAI_DB", "/data/freqai/tradesv3.dryrun.sqlite"))
+    carry = load_carry_trades()
+    if not carry.empty:  # align tz with the (naive) freqtrade close_dates
+        carry["close_date"] = carry["close_date"].dt.tz_localize(None)
 
-    all_dates = pd.concat([quant["close_date"], llm["close_date"], freqai["close_date"]])
+    all_dates = pd.concat([
+        quant["close_date"], llm["close_date"], freqai["close_date"],
+        carry["close_date"],
+    ])
     start = (all_dates.min().tz_localize("UTC") if not all_dates.empty
              and all_dates.min().tzinfo is None else all_dates.min()) \
         if not all_dates.empty else datetime.now(timezone.utc)
@@ -135,6 +167,7 @@ def main() -> None:
         "quant-bot": pnl_by_period(quant, "D"),
         "llm-bot": pnl_by_period(llm, "D"),
         "freqai-bot": pnl_by_period(freqai, "D"),
+        "carry-bot": pnl_by_period(carry, "D"),
     })
     try:
         hold = buy_and_hold_series(start if isinstance(start, datetime) else start.to_pydatetime())
@@ -146,7 +179,8 @@ def main() -> None:
         print(f"(benchmark unavailable: {exc})")
 
     summary = [summarize("quant-bot (Bot A)", quant), summarize("llm-bot (Bot B)", llm),
-               summarize("freqai-bot (Bot C)", freqai)]
+               summarize("freqai-bot (Bot C)", freqai),
+               summarize("carry-bot (Bot D)", carry)]
     cost = llm_cost_usd()
 
     print("\n=== Paper-trading comparison ===")
@@ -160,6 +194,7 @@ def main() -> None:
             "quant-bot": pnl_by_period(quant, freq),
             "llm-bot": pnl_by_period(llm, freq),
             "freqai-bot": pnl_by_period(freqai, freq),
+            "carry-bot": pnl_by_period(carry, freq),
         }).round(2)
         if not table.empty:
             print(f"\n--- {label} realized PnL (USDT) ---")
