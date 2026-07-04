@@ -1,0 +1,4 @@
+anthropic>=0.79
+requests>=2.32
+pandas>=2.2
+pytest>=8.0

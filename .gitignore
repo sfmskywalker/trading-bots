@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# Runtime state (posture, decision logs, kill switch)
+shared/
+comparison-output/
+
+# Freqtrade runtime artifacts
+**/user_data/data/
+**/user_data/logs/
+**/user_data/backtest_results/
+**/user_data/plot/
+**/user_data/hyperopt_results/
+**/user_data/*.sqlite
+**/user_data/*.sqlite-*
+**/user_data/*.json.gz
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/

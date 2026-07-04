@@ -1,0 +1,83 @@
+services:
+  # Bot A: quantitative strategy (EMA/RSI trend) gated by the LLM advisor's
+  # market posture. Dry-run only — no real orders.
+  freqtrade-quant:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    volumes:
+      - ./freqtrade-quant/user_data:/freqtrade/user_data
+      - ./shared:/freqtrade/user_data/posture:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - FREQTRADE__API_SERVER__PASSWORD=${FT_API_PASSWORD:-change-me-locally}
+      - FREQTRADE__API_SERVER__JWT_SECRET_KEY=${FT_JWT_SECRET:-local-dev-jwt-secret-not-for-production-use}
+      - FREQTRADE__API_SERVER__WS_TOKEN=${FT_WS_TOKEN:-local-dev-ws-token-not-for-production-use}
+    command: >
+      trade
+      --config /freqtrade/user_data/config.json
+      --strategy AdvisorGatedTrend
+
+  # Bot B: the experiment — Claude decides every trade via the llm-trader
+  # service. This bot never opens positions on its own. Dry-run only.
+  freqtrade-llm:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    volumes:
+      - ./freqtrade-llm/user_data:/freqtrade/user_data
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      - FREQTRADE__API_SERVER__PASSWORD=${FT_API_PASSWORD:-change-me-locally}
+      - FREQTRADE__API_SERVER__JWT_SECRET_KEY=${FT_JWT_SECRET:-local-dev-jwt-secret-not-for-production-use}
+      - FREQTRADE__API_SERVER__WS_TOKEN=${FT_WS_TOKEN:-local-dev-ws-token-not-for-production-use}
+    command: >
+      trade
+      --config /freqtrade/user_data/config.json
+      --strategy LlmSignalStrategy
+
+  # Scheduled Claude analysis -> shared/posture.json consumed by Bot A.
+  advisor:
+    build: ./services
+    restart: unless-stopped
+    volumes:
+      - ./shared:/shared
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-5}
+      - ADVISOR_INTERVAL_HOURS=${ADVISOR_INTERVAL_HOURS:-4}
+      - SHARED_DIR=/shared
+    command: python -m advisor.main
+
+  # Hourly Claude trade decisions executed on Bot B through its REST API.
+  llm-trader:
+    build: ./services
+    restart: unless-stopped
+    depends_on:
+      - freqtrade-llm
+    volumes:
+      - ./shared:/shared
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-sonnet-5}
+      - SHARED_DIR=/shared
+      - FT_API_URL=http://freqtrade-llm:8080
+      - FT_API_USERNAME=freqtrader
+      - FT_API_PASSWORD=${FT_API_PASSWORD:-change-me-locally}
+    command: python -m llm_trader.main
+
+  # On-demand PnL comparison report: docker compose run --rm comparison
+  comparison:
+    build: ./services
+    profiles: ["report"]
+    volumes:
+      - ./freqtrade-quant/user_data:/data/quant:ro
+      - ./freqtrade-llm/user_data:/data/llm:ro
+      - ./shared:/shared:ro
+      - ./comparison-output:/output
+    environment:
+      - QUANT_DB=/data/quant/tradesv3.dryrun.sqlite
+      - LLM_DB=/data/llm/tradesv3.dryrun.sqlite
+      - SHARED_DIR=/shared
+      - OUTPUT_DIR=/output
+    command: python -m comparison.main
