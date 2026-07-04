@@ -67,6 +67,9 @@ or exhaustion moves under "avoid".
 Be selective: an empty or short watchlist is a perfectly good answer. Momentum
 chasing after a vertical move is the classic retail mistake — prefer early or
 steady strength over spikes. Only include pairs from the candidate list.
+
+The trading bot's currently held pairs are removed from the candidates — pick
+complements to that exposure, not duplicates of what it already holds.
 """
 
 
@@ -74,7 +77,7 @@ def enrich(candidate: dict) -> dict:
     """Add a 7d/RSI view; skip enrichment errors silently (candidate stays basic)."""
     try:
         return {**candidate, **{k: market.summarize_pair(candidate["pair"])[k]
-                                for k in ("change_7d_pct", "rsi_14", "ema_trend")}}
+                                for k in ("change_7d_pct", "rsi_14", "ema_trend", "atr_14_pct")}}
     except Exception:
         return candidate
 
@@ -91,11 +94,14 @@ def run_once() -> dict:
     else:
         try:
             tickers = market.fetch_tickers_24h()
-            cands = [enrich(c) for c in filters.candidates(tickers, exclude=set(market.PAIRS))]
+            held = {p["pair"] for p in context.read_bot_positions()}
+            cands = [enrich(c) for c in filters.candidates(
+                tickers, exclude=set(market.PAIRS) | held)]
             lessons = context.read_lessons()
             user_content = (
                 f"Candidates (pre-filtered, {len(cands)} pairs):\n"
                 + json.dumps(cands, indent=2)
+                + f"\n\nBot holdings excluded from candidates: {sorted(held)}"
                 + "\n\nFear & Greed last 7 days:\n"
                 + json.dumps(market.fetch_fear_greed())
                 + (f"\n\nLessons from past performance reviews:\n{lessons}" if lessons else "")

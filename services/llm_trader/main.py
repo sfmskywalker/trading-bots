@@ -10,15 +10,14 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from common import claude, context, market
+from common import claude, context, history, market
 from common.freqtrade_api import FreqtradeClient
-from common.util import append_jsonl, read_jsonl, shared_dir, utc_now_iso
+from common.history import DECISION_LOG
+from common.util import append_jsonl, atomic_write_json, read_jsonl, shared_dir, utc_now_iso
 from llm_trader import guardrails
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("llm_trader")
-
-DECISION_LOG = "llm_trader_decisions.jsonl"
 
 
 def decision_schema(allowed_pairs: list[str]) -> dict:
@@ -68,6 +67,18 @@ Rules of thumb:
 - Cut losers, let winners run. A hard -5% stoploss is enforced outside your
   control; positions are force-closed after 7 days.
 - Never risk more than you can articulate a reason for.
+
+Data notes:
+- atr_14_pct and vol_daily_pct measure volatility; size smaller in high-vol
+  pairs, where the same stake carries more risk.
+- closes_2h_pct is the price path sampled every ~2h over the last ~24h, oldest
+  first, as % vs the current price — it shows the shape of the move, not just
+  the endpoints.
+- Your per-pair record is your own realized results on this account; repeated
+  losses in a pair are evidence against re-entering it without a genuinely new
+  thesis.
+- Your recent decision cycles are for continuity: do not re-buy a pair you just
+  sold, and do not flip your view hour to hour without new information.
 """
 
 
@@ -110,20 +121,48 @@ def bot_state(ft: FreqtradeClient) -> tuple[dict, guardrails.BotState]:
     return snapshot, state
 
 
-def tradable_universe() -> tuple[list[str], list[dict]]:
-    """Core pairs plus the scout's current (code-filtered) watchlist."""
+def publish_positions(position_data: dict) -> None:
+    """Publish open positions for the scout (which has no Freqtrade access)."""
+    atomic_write_json(shared_dir() / context.POSITIONS_FILE, {
+        "generated_at": utc_now_iso(),
+        "positions": [
+            {
+                "pair": p["pair"],
+                "current_profit_pct": p["current_profit_pct"],
+                "open_date": p["open_date"],
+            }
+            for p in position_data["open_positions"]
+        ],
+    })
+
+
+def tradable_universe(open_pairs: list[str]) -> tuple[list[str], list[dict]]:
+    """Core pairs plus the scout's current watchlist plus currently held pairs."""
     watchlist = context.read_watchlist()
     pairs = list(market.PAIRS)
-    for entry in watchlist:
-        if entry["pair"] not in pairs:
-            pairs.append(entry["pair"])
+    for pair in [e["pair"] for e in watchlist] + open_pairs:
+        if pair not in pairs:
+            pairs.append(pair)
     return pairs, watchlist
 
 
+def safe_pair_record(ft: FreqtradeClient) -> list[dict]:
+    try:
+        return history.per_pair_stats(ft.trades())
+    except Exception:
+        logger.warning("Could not fetch closed-trade record", exc_info=True)
+        return []
+
+
 def run_cycle(ft: FreqtradeClient) -> None:
-    pairs, watchlist = tradable_universe()
-    market_data = market.market_snapshot(pairs)
     position_data, state = bot_state(ft)
+    open_pairs = [p["pair"] for p in position_data["open_positions"]]
+    publish_positions(position_data)
+
+    pairs, watchlist = tradable_universe(open_pairs)
+    market_data = market.market_snapshot(pairs)
+    pair_record = safe_pair_record(ft)
+    recent = history.recent_decisions()
     lessons = context.read_lessons()
 
     user_content = (
@@ -135,6 +174,10 @@ def run_cycle(ft: FreqtradeClient) -> None:
         f"Market snapshot:\n{json.dumps(market_data, indent=2)}\n\n"
         f"Your account:\n{json.dumps(position_data, indent=2)}"
         + (f"\n\nLessons from past performance reviews:\n{lessons}" if lessons else "")
+        + (f"\n\nYour per-pair record (your own closed trades on this account):\n"
+           f"{json.dumps(pair_record)}" if pair_record else "")
+        + (f"\n\nYour last {len(recent)} decision cycles (oldest first):\n"
+           f"{json.dumps(recent)}" if recent else "")
     )
     decision, usage = claude.call_structured(
         system=SYSTEM_PROMPT, user_content=user_content, schema=decision_schema(pairs),

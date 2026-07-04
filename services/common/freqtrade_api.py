@@ -51,6 +51,10 @@ class FreqtradeClient:
     def balance(self) -> dict:
         return self._request("GET", "balance")
 
+    def trades(self, limit: int = 500) -> list[dict]:
+        """Closed trade history (Freqtrade GET /trades), oldest first."""
+        return self._request("GET", "trades", params={"limit": limit})["trades"]
+
     def force_enter(self, pair: str, stake_amount: float) -> dict:
         # Market orders so LLM decisions fill immediately instead of resting
         # as limit orders that may expire unfilled.

@@ -41,6 +41,39 @@ def rsi(closes: pd.Series, period: int = 14) -> float:
     return float((100 - 100 / (1 + rs)).iloc[-1])
 
 
+def pct_change(closes: pd.Series, bars: int) -> float | None:
+    """% change of the last close vs `bars` candles ago; None if too short."""
+    if len(closes) <= bars:
+        return None
+    past = float(closes.iloc[-1 - bars])
+    return round((float(closes.iloc[-1]) / past - 1) * 100, 2)
+
+
+def atr_pct(df: pd.DataFrame, period: int = 14) -> float:
+    """Wilder ATR as a % of the last close (same EWM smoothing as rsi())."""
+    high, low, prev_close = df["high"], df["low"], df["close"].shift()
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / period, adjust=False).mean().iloc[-1]
+    return round(float(atr) / float(df["close"].iloc[-1]) * 100, 2)
+
+
+def realized_vol_daily_pct(closes: pd.Series, window: int = 168) -> float:
+    """Std of hourly returns over `window` candles, scaled to a daily %."""
+    returns = closes.pct_change().iloc[-window:]
+    return round(float(returns.std()) * (24 ** 0.5) * 100, 2)
+
+
+def trajectory_pct(closes: pd.Series, points: int = 12, step: int = 2) -> list[float]:
+    """Closes sampled every `step` candles as % vs current price, oldest first."""
+    price = float(closes.iloc[-1])
+    idx = [-1 - i * step for i in range(points) if 1 + i * step <= len(closes)]
+    return [round((float(closes.iloc[i]) / price - 1) * 100, 2) for i in reversed(idx)]
+
+
 def summarize_pair(pair: str) -> dict:
     """Compact indicator snapshot suitable for an LLM prompt."""
     df = fetch_klines(pair)
@@ -48,14 +81,25 @@ def summarize_pair(pair: str) -> dict:
     price = float(closes.iloc[-1])
     ema21 = float(closes.ewm(span=21, adjust=False).mean().iloc[-1])
     ema55 = float(closes.ewm(span=55, adjust=False).mean().iloc[-1])
+    high_24h = float(df["high"].iloc[-24:].max())
+    low_24h = float(df["low"].iloc[-24:].min())
     return {
         "pair": pair,
         "price": price,
-        "change_24h_pct": round((price / float(closes.iloc[-25]) - 1) * 100, 2),
-        "change_7d_pct": round((price / float(closes.iloc[-169]) - 1) * 100, 2),
+        "change_1h_pct": pct_change(closes, 1),
+        "change_4h_pct": pct_change(closes, 4),
+        "change_24h_pct": pct_change(closes, 24),
+        "change_7d_pct": pct_change(closes, 168),
         "rsi_14": round(rsi(closes), 1),
         "ema_trend": "up" if ema21 > ema55 else "down",
         "price_vs_ema21_pct": round((price / ema21 - 1) * 100, 2),
+        "atr_14_pct": atr_pct(df),
+        "vol_daily_pct": realized_vol_daily_pct(closes),
+        "range_24h_pct": {
+            "high": round((high_24h / price - 1) * 100, 2),
+            "low": round((low_24h / price - 1) * 100, 2),
+        },
+        "closes_2h_pct": trajectory_pct(closes),
     }
 
 

@@ -9,7 +9,7 @@ import json
 import logging
 import time
 
-from common import claude, context, market
+from common import claude, context, history, market
 from common.util import append_jsonl, atomic_write_json, shared_dir, utc_now_iso
 import os
 
@@ -49,6 +49,8 @@ Guidelines:
   pump-and-dump behavior the bot should not enter.
 - Be conservative. The cost of missing a trade is lower than the cost of a
   drawdown. When the data is ambiguous, choose neutral with multiplier 1.0.
+- Continuity: avoid flip-flopping the regime without a clear change in the
+  data, but do not anchor to a prior posture when conditions genuinely changed.
 - rationale: 2-3 sentences max.
 """
 
@@ -69,10 +71,13 @@ def neutral_posture(reason: str) -> dict:
 def generate_posture() -> dict:
     snapshot = market.market_snapshot()
     watchlist = context.read_watchlist()
+    postures = history.recent_postures()
     lessons = context.read_lessons()
     user_content = (
         "Current market snapshot (majors):\n" + json.dumps(snapshot, indent=2)
         + "\n\nScout watchlist:\n" + json.dumps(watchlist, indent=2)
+        + (f"\n\nYour recent postures (oldest first):\n{json.dumps(postures)}"
+           if postures else "")
         + (f"\n\nLessons from past performance reviews:\n{lessons}" if lessons else "")
     )
     posture, usage = claude.call_structured(

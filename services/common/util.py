@@ -42,3 +42,8 @@ def read_jsonl(path: Path) -> list[dict]:
             if line:
                 records.append(json.loads(line))
     return records
+
+
+def tail_jsonl(path: Path, n: int) -> list[dict]:
+    """Last n records of a JSONL journal, oldest first."""
+    return read_jsonl(path)[-n:]
