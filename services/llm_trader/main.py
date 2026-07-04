@@ -49,7 +49,9 @@ def decision_schema(allowed_pairs: list[str]) -> dict:
 
 SYSTEM_PROMPT = """\
 You are an autonomous crypto spot trader in a PAPER TRADING experiment. You
-manage a simulated 10,000 USDT wallet on Binance spot. Long only, no leverage.
+manage a simulated wallet on Binance spot that started at 10,000 USDT; its
+current balance and available cash are given in each market snapshot. Long
+only, no leverage.
 You may only trade the pairs listed in the prompt: a set of core majors plus
 a scout's current watchlist (each watchlist entry comes with a thesis — treat
 it as a hypothesis to evaluate, not an instruction to buy).
@@ -90,6 +92,14 @@ Data notes:
 def bot_state(ft: FreqtradeClient) -> tuple[dict, guardrails.BotState]:
     open_trades = ft.status()
     profit = ft.profit()
+    balance = ft.balance()
+    stake_currency = balance.get("stake") or "USDT"
+    wallet_total = float(balance.get("total_bot") or balance.get("total") or 0)
+    available_usdt = next(
+        (float(c.get("free") or 0) for c in balance.get("currencies", [])
+         if c.get("currency") == stake_currency),
+        0.0,
+    )
 
     today = datetime.now(timezone.utc).date().isoformat()
     entries_today = sum(
@@ -115,13 +125,16 @@ def bot_state(ft: FreqtradeClient) -> tuple[dict, guardrails.BotState]:
         "profit_today_usdt": profit.get("profit_today_abs", 0),
         "trade_count": profit.get("trade_count", 0),
         "winrate": profit.get("winrate", 0),
+        "wallet_total_usdt": round(wallet_total, 2),
+        "available_usdt": round(available_usdt, 2),
     }
-    daily_loss_pct = max(0.0, -float(profit.get("profit_today_abs") or 0) / 100)
+    daily_loss_pct = guardrails.compute_daily_loss_pct(profit.get("profit_today_abs"), wallet_total)
     state = guardrails.BotState(
         open_trade_count=len(open_trades),
         open_trade_ids=[t["trade_id"] for t in open_trades],
         entries_today=entries_today,
         daily_loss_pct=daily_loss_pct,
+        available_usdt=available_usdt,
     )
     return snapshot, state
 

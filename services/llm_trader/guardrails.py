@@ -20,6 +20,14 @@ MAX_DAILY_LOSS_PCT = _env_float("GUARD_MAX_DAILY_LOSS_PCT", 3.0)
 KILL_SWITCH_FILE = "KILL"
 
 
+def compute_daily_loss_pct(profit_today_abs: float | None, wallet_total: float | None) -> float:
+    """Today's loss as a % of the current wallet. Fails closed: unknown or
+    nonsensical wallet totals return inf so the daily-loss cap blocks buys."""
+    if wallet_total is None or not wallet_total > 0:
+        return float("inf")
+    return max(0.0, -float(profit_today_abs or 0) / wallet_total * 100)
+
+
 @dataclass
 class BotState:
     """What the guardrails need to know about the bot right now."""
@@ -27,6 +35,7 @@ class BotState:
     open_trade_ids: list[int] = field(default_factory=list)
     entries_today: int = 0
     daily_loss_pct: float = 0.0  # positive number = loss
+    available_usdt: float = 0.0  # free stake-currency cash; 0 = fail closed
 
 
 def kill_switch_active() -> bool:
@@ -52,6 +61,8 @@ def validate(decision: dict, state: BotState, allowed_pairs: list[str]) -> tuple
         stake = decision.get("stake_usdt") or 0
         if not 0 < stake <= MAX_STAKE_USDT:
             return False, f"stake {stake} outside (0, {MAX_STAKE_USDT}]"
+        if stake > state.available_usdt:
+            return False, f"stake {stake} exceeds available cash {state.available_usdt:.2f} USDT"
         if state.open_trade_count >= MAX_OPEN_TRADES:
             return False, f"already {state.open_trade_count} open trades (max {MAX_OPEN_TRADES})"
         if state.entries_today >= MAX_TRADES_PER_DAY:

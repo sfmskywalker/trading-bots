@@ -7,7 +7,7 @@ from llm_trader.guardrails import BotState
 @pytest.fixture
 def state():
     return BotState(open_trade_count=1, open_trade_ids=[7], entries_today=2,
-                    daily_loss_pct=0.5)
+                    daily_loss_pct=0.5, available_usdt=5_000.0)
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +69,36 @@ def test_daily_loss_cap_rejected(state):
     state.daily_loss_pct = guardrails.MAX_DAILY_LOSS_PCT
     allowed, reason = guardrails.validate(buy(), state, PAIRS)
     assert not allowed and "loss" in reason
+
+
+def test_daily_loss_pct_scales_with_wallet():
+    assert guardrails.compute_daily_loss_pct(-300, 10_000) == 3.0
+    assert guardrails.compute_daily_loss_pct(-300, 20_000) == 1.5
+
+
+def test_daily_gain_or_missing_profit_is_zero_loss():
+    assert guardrails.compute_daily_loss_pct(250, 10_000) == 0.0
+    assert guardrails.compute_daily_loss_pct(None, 10_000) == 0.0
+
+
+def test_unknown_wallet_fails_closed(state):
+    for wallet in (0, -5, None):
+        assert guardrails.compute_daily_loss_pct(-10, wallet) == float("inf")
+    state.daily_loss_pct = guardrails.compute_daily_loss_pct(-10, 0)
+    allowed, reason = guardrails.validate(buy(), state, PAIRS)
+    assert not allowed and "loss" in reason
+
+
+def test_stake_over_available_cash_rejected(state):
+    state.available_usdt = 400.0
+    allowed, reason = guardrails.validate(buy(stake=500), state, PAIRS)
+    assert not allowed and "available" in reason
+
+
+def test_stake_equal_to_available_cash_allowed(state):
+    state.available_usdt = 500.0
+    allowed, reason = guardrails.validate(buy(stake=500), state, PAIRS)
+    assert allowed, reason
 
 
 def test_sell_of_open_trade_allowed(state):
